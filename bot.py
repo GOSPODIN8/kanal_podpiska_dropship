@@ -4,6 +4,8 @@ import time
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -24,7 +26,7 @@ from scheduler import start_scheduler
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-bot = Bot(token=config.BOT_TOKEN)
+bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 
 
@@ -111,16 +113,29 @@ async def cmd_subscribe(message: Message):
 
 
 async def send_subscription_invoice(user_id: int):
-    await bot.send_invoice(
-        chat_id=user_id,
-        title=texts.PAYMENT_TITLE.format(channel_name=config.CHANNEL_NAME),
-        description=texts.PAYMENT_DESCRIPTION.format(channel_name=config.CHANNEL_NAME),
-        payload=f"sub_{user_id}_{int(time.time())}",
-        provider_token="",  # для Telegram Stars provider_token не нужен
-        currency="XTR",
-        prices=[LabeledPrice(label="Подписка на 1 месяц", amount=config.SUBSCRIPTION_PRICE_STARS)],
-        subscription_period=config.SUBSCRIPTION_PERIOD_SECONDS,
+    # Важно: у метода send_invoice нет параметра subscription_period —
+    # периодические Stars-инвойсы создаются только через create_invoice_link.
+    try:
+        link = await bot.create_invoice_link(
+            title=texts.PAYMENT_TITLE.format(channel_name=config.CHANNEL_NAME),
+            description=texts.PAYMENT_DESCRIPTION.format(channel_name=config.CHANNEL_NAME),
+            payload=f"sub_{user_id}_{int(time.time())}",
+            provider_token="",  # для Telegram Stars provider_token не нужен
+            currency="XTR",
+            prices=[LabeledPrice(label="Подписка на 1 месяц", amount=config.SUBSCRIPTION_PRICE_STARS)],
+            subscription_period=config.SUBSCRIPTION_PERIOD_SECONDS,
+        )
+    except Exception:
+        logger.exception(f"Не удалось создать инвойс для {user_id}")
+        await bot.send_message(user_id, "⚠️ Не получилось создать оплату, попробуй ещё раз через минуту.")
+        return
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"💳 Оплатить {config.SUBSCRIPTION_PRICE_STARS} ⭐", url=link)]
+        ]
     )
+    await bot.send_message(user_id, "Нажми на кнопку, чтобы оплатить:", reply_markup=kb)
 
 
 @dp.pre_checkout_query()
